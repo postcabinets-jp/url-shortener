@@ -2,26 +2,48 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { z } from "zod";
 import type { ActionResult } from "./links";
 import type { Domain } from "@/types/database";
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+const hostnameSchema = z
+  .string()
+  .min(4)
+  .max(253)
+  .regex(
+    /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/,
+    "Invalid hostname format"
+  );
+
+const addDomainSchema = z.object({
+  workspaceId: z.string().uuid(),
+  hostname: hostnameSchema,
+});
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
 
 export async function addDomain(
   workspaceId: string,
   hostname: string
 ): Promise<ActionResult<Domain>> {
+  const parsed = addDomainSchema.safeParse({ workspaceId, hostname });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Validation failed" };
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
 
-  // Basic hostname validation
-  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
-  if (!hostnameRegex.test(hostname)) {
-    return { success: false, error: "Invalid hostname format" };
-  }
-
   const { data, error } = await supabase
     .from("domains")
-    .insert({ workspace_id: workspaceId, hostname: hostname.toLowerCase() })
+    .insert({ workspace_id: parsed.data.workspaceId, hostname: parsed.data.hostname.toLowerCase() })
     .select()
     .single();
 
@@ -37,6 +59,9 @@ export async function addDomain(
 }
 
 export async function verifyDomain(domainId: string): Promise<ActionResult<Domain>> {
+  const idParsed = z.string().uuid().safeParse(domainId);
+  if (!idParsed.success) return { success: false, error: "Invalid domain ID" };
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
@@ -80,6 +105,9 @@ async function simulateDnsVerification(_hostname: string, _token: string): Promi
 }
 
 export async function deleteDomain(domainId: string): Promise<ActionResult<void>> {
+  const idParsed = z.string().uuid().safeParse(domainId);
+  if (!idParsed.success) return { success: false, error: "Invalid domain ID" };
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };

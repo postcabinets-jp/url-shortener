@@ -3,18 +3,41 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createHash, randomBytes } from "crypto";
+import { z } from "zod";
 import type { ActionResult } from "./links";
 import type { ApiKey } from "@/types/database";
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+const createApiKeySchema = z.object({
+  workspaceId: z.string().uuid(),
+  name: z.string().min(1, "Name is required").max(100),
+});
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export type CreateApiKeyResult = {
   apiKey: ApiKey;
   rawKey: string; // only shown once
 };
 
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
 export async function createApiKey(
   workspaceId: string,
   name: string
 ): Promise<ActionResult<CreateApiKeyResult>> {
+  const parsed = createApiKeySchema.safeParse({ workspaceId, name });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Validation failed" };
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
@@ -26,8 +49,8 @@ export async function createApiKey(
   const { data, error } = await supabase
     .from("api_keys")
     .insert({
-      workspace_id: workspaceId,
-      name,
+      workspace_id: parsed.data.workspaceId,
+      name: parsed.data.name,
       key_hash: keyHash,
       created_by: user.id,
     })
@@ -41,6 +64,9 @@ export async function createApiKey(
 }
 
 export async function revokeApiKey(keyId: string): Promise<ActionResult<void>> {
+  const idParsed = z.string().uuid().safeParse(keyId);
+  if (!idParsed.success) return { success: false, error: "Invalid key ID" };
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
